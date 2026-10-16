@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { margin:0; font:14px system-ui,sans-serif; color:#e2e8f0; background:transparent; }
+    button { border:1px solid #35816d; border-radius:10px; padding:10px 14px; background:#123f37; color:#f0fdfa; font-weight:600; cursor:pointer; }
+    button:disabled { opacity:.65; cursor:wait; }
+    #status { margin-left:10px; color:#b8c9d8; }
+  </style>
+</head>
+<body>
+  <button id="locate" type="button">Use my current location</button><span id="status" aria-live="polite"></span>
+  <script>
+    function sendToStreamlit(type, data) {
+      window.parent.postMessage(Object.assign({isStreamlitMessage:true, type:type}, data || {}), "*");
+    }
+    const button = document.getElementById("locate");
+    const statusText = document.getElementById("status");
+    button.addEventListener("click", function () {
+      if (!navigator.geolocation) {
+        statusText.textContent = "Location is not available in this browser.";
+        sendToStreamlit("streamlit:setComponentValue", {value:{error:"Geolocation is not supported by this browser."}});
+        return;
+      }
+      button.disabled = true;
+      statusText.textContent = "Waiting for browser permission…";
+      navigator.geolocation.getCurrentPosition(function (position) {
+        const result = {
+          latitude:position.coords.latitude,
+          longitude:position.coords.longitude,
+          accuracy:position.coords.accuracy,
+          timestamp:position.timestamp
+        };
+        statusText.textContent = "Location received.";
+        sendToStreamlit("streamlit:setComponentValue", {value:result});
+      }, function (error) {
+        const messages = {
+          1:"Permission was denied. Choose a town or enter coordinates instead.",
+          2:"Your location could not be determined. Try again or enter coordinates.",
+          3:"Location request timed out. Try again or enter coordinates."
+        };
+        const message = messages[error.code] || "Could not get your location.";
+        statusText.textContent = message;
+        button.disabled = false;
+        sendToStreamlit("streamlit:setComponentValue", {value:{error:message}});
+      }, {enableHighAccuracy:true, timeout:15000, maximumAge:60000});
+    });
+    sendToStreamlit("streamlit:componentReady", {apiVersion:1});
+    sendToStreamlit("streamlit:setFrameHeight", {height:52});
+  </script>
+</body>
+</html>
