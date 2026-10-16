@@ -65,3 +65,55 @@ def inspect_soil_photo(image_bytes, mime_type, soil_type, weather_summary):
         return None, f"Gemini photo analysis failed (HTTP {status or 'error'}). Check the model setting and network."
     except (requests.RequestException, ValueError, KeyError, IndexError, TypeError):
         return None, "Photo analysis could not be completed. Check the API key and network, or use the weather estimate and a direct field check."
+
+
+def photo_water_guidance(visual, water_balance_action, active_crop=True, crop_stage=None):
+    """Combine visible surface cues with the crop water-balance recommendation."""
+    if not active_crop or water_balance_action == "NO_CROP":
+        return {
+            "status": "NO ACTIVE CROP",
+            "title": "No watering needed",
+            "detail": "There is no active crop saved for this field.",
+        }
+
+    condition = visual.get("condition") if isinstance(visual, dict) else None
+    if condition not in {"Likely wet", "Moist", "Slightly dry", "Likely dry"}:
+        return {
+            "status": "INSUFFICIENT PHOTO DETAIL",
+            "title": "AI could not judge this photo",
+            "detail": "Take a close, well-lit photo of bare soil so the AI can see surface moisture cues.",
+        }
+
+    balance_needs_water = water_balance_action in {"IRRIGATE_NOW", "IRRIGATE_SOON"}
+    photo_looks_dry = condition in {"Slightly dry", "Likely dry"}
+
+    if crop_stage == "late_stage" and balance_needs_water:
+        return {
+            "status": "CROP-STAGE CAUTION",
+            "title": "Possible water need near harvest",
+            "detail": "The photo and crop estimate suggest dryness, but this crop is near its harvest window. Avoid a large irrigation based only on a photo estimate.",
+        }
+
+    if photo_looks_dry and balance_needs_water:
+        return {
+            "status": "IRRIGATION LIKELY NEEDED",
+            "title": "Photo suggests watering is needed",
+            "detail": "The photo shows dry surface cues and the crop water-balance estimate also shows a root-zone deficit. This is a visual estimate, not a direct moisture measurement.",
+        }
+    if photo_looks_dry:
+        return {
+            "status": "NO IRRIGATION NEEDED NOW",
+            "title": "No watering needed right now",
+            "detail": "The surface looks dry, but the crop water-balance estimate does not show an immediate root-zone deficit.",
+        }
+    if balance_needs_water:
+        return {
+            "status": "CONFLICTING SIGNALS",
+            "title": "Photo and crop estimate disagree",
+            "detail": "The surface looks moist, but the crop water-balance estimate shows a root-zone deficit. A surface photo cannot confirm moisture deeper in the soil, so this estimate is uncertain.",
+        }
+    return {
+        "status": "NO IRRIGATION NEEDED NOW",
+        "title": "No watering needed right now",
+        "detail": "The photo shows surface moisture and the crop water-balance estimate does not show an immediate root-zone deficit.",
+    }

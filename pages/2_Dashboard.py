@@ -1,5 +1,6 @@
 import streamlit as st
 import asyncio
+import hashlib
 import pandas as pd
 from datetime import date, datetime, timezone
 from html import escape
@@ -16,7 +17,7 @@ from core.decision import decide
 from core.field_condition import estimate_field_condition
 from core.harvest import harvest_weather_outlook
 from core.soil_lookup import lookup_soil
-from core.vision import inspect_soil_photo
+from core.vision import inspect_soil_photo, photo_water_guidance
 from core.waterbalance import run_balance
 from core.db import latest_sensor_reading, sensor_reading_history
 from core.sensors import connection_state, irrigation_prediction
@@ -150,22 +151,94 @@ if not chart_rows.empty:
 else:
     st.caption("Sensor history will appear after the ESP32 sends readings to the local sensor API.")
 
+photo_analysis = None
+photo_analysis_error = None
+photo_state_key = f"soil_photo_analysis_{fid}"
+with st.expander("Use a soil photo for the AI watering prediction"):
+    st.caption("Take a close-up of bare soil. Gemini will assess visible surface cues and combine them with the crop water-balance estimate.")
+    st.caption("The photo is sent to Google Gemini only when you request a prediction; this app does not save the image.")
+    mapped_soil = st.session_state.get(f"mapped_soil_{fid}")
+    if st.button("Check mapped soil type", key=f"soilmap{fid}"):
+        with st.spinner("Checking the public soil map…"):
+            mapped_soil = lookup_soil(round(float(farm["latitude"]), 4), round(float(farm["longitude"]), 4))
+        if mapped_soil:
+            st.session_state[f"mapped_soil_{fid}"] = mapped_soil
+        else:
+            st.info("No mapped soil estimate was returned for this location. The saved soil type will be used as context.")
+    if mapped_soil:
+        st.caption(f"Approximate mapped soil: {mapped_soil['soil']} · nearest mapped cell about {mapped_soil['distance_m']} m away.")
+    soil_for_photo = mapped_soil["soil"] if mapped_soil else farm["soil"]
+    camera_photo = st.camera_input("Take a close-up of bare soil", key=f"soilphoto{fid}")
+    uploaded_photo = st.file_uploader(
+        "Or upload a soil photo",
+        type=["jpg", "jpeg", "png", "webp"],
+        key=f"soilphoto_upload_{fid}",
+    )
+    photo = camera_photo or uploaded_photo
+    if photo:
+        photo_bytes = photo.getvalue()
+        photo_digest = hashlib.sha256(photo_bytes).hexdigest()
+        if st.button("Predict from soil photo", key=f"analyzesoil{fid}"):
+            if not GEMINI_API_KEY:
+                st.session_state[photo_state_key] = {
+                    "digest": photo_digest,
+                    "error": "Photo prediction needs GEMINI_API_KEY in the local .env file.",
+                }
+            else:
+                with st.spinner("Gemini is assessing the soil photo…"):
+                    visual, error = inspect_soil_photo(
+                        photo_bytes, photo.type, soil_for_photo, condition["label"],
+                    )
+                st.session_state[photo_state_key] = {
+                    "digest": photo_digest,
+                    "visual": visual,
+                    "error": error,
+                }
+        saved_photo_result = st.session_state.get(photo_state_key, {})
+        if saved_photo_result.get("digest") == photo_digest:
+            photo_analysis = saved_photo_result.get("visual")
+            photo_analysis_error = saved_photo_result.get("error")
+            if photo_analysis:
+                st.caption(f"Photo assessment: {photo_analysis['condition']} · {photo_analysis['note']}")
+            elif photo_analysis_error:
+                st.info(photo_analysis_error)
+    else:
+        st.session_state.pop(photo_state_key, None)
+
+photo_guidance = photo_water_guidance(
+    photo_analysis,
+    result["action"],
+    active_crop=result["action"] != "NO_CROP",
+    crop_stage=status,
+) if photo_analysis else None
+
 st.markdown("### AI Irrigation Prediction")
-st.caption("Rule-based baseline only. No trained irrigation ML model or validated training dataset is available.")
+st.caption("Gemini photo assessment + crop water-balance estimate when a soil photo is submitted. No trained irrigation ML model is bundled.")
 historical_balance=balance.loc[~balance["is_forecast"]]
 balance_context=None
 if not historical_balance.empty:
     last_balance=historical_balance.iloc[-1]
     balance_context={"stress":bool(last_balance["stress"])}
-prediction=irrigation_prediction(sensor_reading,balance_context,stale_seconds=SENSOR_STALE_SECONDS,
-                                 active_crop=result["action"]!="NO_CROP",crop_stage=status)
-if sensor_reading is None and prediction["status"] == "INSUFFICIENT DATA":
-    st.info("Hardware prediction is waiting for the ESP32. No sensor reading has arrived yet; the weather-based field recommendation above is still available.")
-elif prediction["status"]=="IRRIGATION NEEDED": st.error(f"**{prediction['status']}** · {prediction['reason']}")
-elif prediction["status"]=="NO IRRIGATION NEEDED": st.success(f"**{prediction['status']}** · {prediction['reason']}")
-else: st.warning(f"**{prediction['status']}** · {prediction['reason']}")
-if sensor_reading is not None:
-    st.caption(f"Inputs: {', '.join(prediction['measurements'])} · Method: {prediction['source']} · Relative-moisture dry threshold: {SENSOR_DRY_THRESHOLD_PERCENT:.0f}% (configurable; not volumetric water content).")
+if photo_guidance:
+    photo_message = f"**{photo_guidance['status']}** · {photo_guidance['detail']}"
+    if photo_guidance["status"] == "IRRIGATION LIKELY NEEDED":
+        st.warning(photo_message)
+    elif photo_guidance["status"] == "NO IRRIGATION NEEDED NOW":
+        st.success(photo_message)
+    else:
+        st.info(photo_message)
+elif photo_analysis_error:
+    st.info(f"Photo prediction unavailable: {photo_analysis_error}")
+else:
+    prediction=irrigation_prediction(sensor_reading,balance_context,stale_seconds=SENSOR_STALE_SECONDS,
+                                     active_crop=result["action"]!="NO_CROP",crop_stage=status)
+    if sensor_reading is None and prediction["status"] == "INSUFFICIENT DATA":
+        st.info("No photo or ESP32 reading has been submitted yet. Use the soil-photo option above for an AI visual estimate, or connect the ESP32. The weather-based field recommendation remains available.")
+    elif prediction["status"]=="IRRIGATION NEEDED": st.error(f"**{prediction['status']}** · {prediction['reason']}")
+    elif prediction["status"]=="NO IRRIGATION NEEDED": st.success(f"**{prediction['status']}** · {prediction['reason']}")
+    else: st.warning(f"**{prediction['status']}** · {prediction['reason']}")
+    if sensor_reading is not None:
+        st.caption(f"Inputs: {', '.join(prediction['measurements'])} · Method: {prediction['source']} · Relative-moisture dry threshold: {SENSOR_DRY_THRESHOLD_PERCENT:.0f}% (configurable; not volumetric water content).")
 st.caption("DHT11 temperature and humidity are displayed as air measurements only; the irrigation threshold does not use them as soil-moisture evidence.")
 st.caption(f"Sensor API configured at {SENSOR_API_BASE_URL}. For an ESP32, use the computer's LAN IP address in firmware; 127.0.0.1 on the ESP32 refers to the ESP32 itself.")
 
@@ -177,7 +250,15 @@ advice = {
     "SKIP_RAIN_EXPECTED": ("Wait for the rain", "Rain is expected soon. Check the soil after it rains before watering."),
 }
 advice_title, advice_text = advice.get(result["action"], advice["WAIT"])
-if result["action"] == "IRRIGATE_NOW" and any("Forecast rain is too small" in reason for reason in result["reasons"]):
+photo_prompt = not photo_analysis and not photo_analysis_error and result["action"] in {"IRRIGATE_NOW", "IRRIGATE_SOON"}
+if photo_guidance:
+    advice_title, advice_text = photo_guidance["title"], photo_guidance["detail"]
+elif photo_prompt:
+    advice_title = "Take a soil photo for an AI prediction"
+    advice_text = "The crop water-balance estimate suggests a possible deficit. Take or upload bare soil below so the AI can assess visible moisture cues and refine the watering prediction."
+elif photo_analysis_error:
+    advice_text = f"Photo prediction is unavailable. The weather-based estimate remains: {advice_text}"
+elif result["action"] == "IRRIGATE_NOW" and any("Forecast rain is too small" in reason for reason in result["reasons"]):
     advice_text = "A little rain may be forecast, but it may not cover the estimated crop water deficit. Check the soil by hand before deciding to water."
 elif result["action"] == "IRRIGATE_NOW" and condition["label"] == "Likely wet":
     advice_text = "Recent rain may have left the field wet. Check the soil by hand before deciding to water."
@@ -190,11 +271,17 @@ action_style = {
     "SKIP_RAIN_EXPECTED": "recommend-neutral",
     "NO_CROP": "recommend-neutral",
 }.get(result["action"], "recommend-neutral")
+if photo_guidance and photo_guidance["status"] == "NO IRRIGATION NEEDED NOW":
+    action_style = "recommend-success"
+elif photo_guidance and photo_guidance["status"] != "IRRIGATION LIKELY NEEDED":
+    action_style = "recommend-neutral"
+advice_source = "PHOTO + CROP ESTIMATE" if photo_guidance else ("PHOTO PREDICTION" if photo_prompt else "FIELD FIRST")
+advice_hint = "AI visual prediction" if photo_guidance else ("Take or upload below" if photo_prompt else "Check before you water")
 st.markdown(
     f'<section class="recommend-banner today-advice {action_style}"><div class="advice-mark" aria-hidden="true">✳</div>'
     f'<div class="advice-copy"><div class="today-advice-kicker">YOUR NEXT STEP</div>'
     f'<h2>{escape(advice_title)}</h2><p>{escape(advice_text)}</p></div>'
-    f'<div class="advice-side-note"><span>FIELD FIRST</span><small>Check before you water</small></div></section>',
+    f'<div class="advice-side-note"><span>{escape(advice_source)}</span><small>{escape(advice_hint)}</small></div></section>',
     unsafe_allow_html=True,
 )
 
@@ -264,30 +351,5 @@ elif st.button("Record harvest today", help="Saves today's date and this field's
         st.rerun()
     except ValueError as exc:
         st.error(str(exc))
-
-with st.expander("Optional: use a soil map or take a soil photo"):
-    st.caption("These checks are optional. The main weather outlook and watering advice work without them.")
-    mapped_soil = st.session_state.get(f"mapped_soil_{fid}")
-    if st.button("Check mapped soil type", key=f"soilmap{fid}"):
-        with st.spinner("Checking the public soil map…"):
-            mapped_soil = lookup_soil(round(float(farm["latitude"]), 4), round(float(farm["longitude"]), 4))
-        if mapped_soil:
-            st.session_state[f"mapped_soil_{fid}"] = mapped_soil
-        else:
-            st.info("No mapped soil estimate was returned for this location. The soil type saved during setup is still used for the advice.")
-    if mapped_soil:
-        st.caption(f"Approximate mapped soil: {mapped_soil['soil']} · nearest mapped cell about {mapped_soil['distance_m']} m away. Compare with the field itself.")
-    soil_for_photo = mapped_soil["soil"] if mapped_soil else farm["soil"]
-    photo = st.camera_input("Take a close-up of bare soil", key=f"soilphoto{fid}")
-    if photo and st.button("Estimate surface from photo", key=f"analyzesoil{fid}"):
-        if not GEMINI_API_KEY:
-            st.info("Photo analysis needs a Gemini key in your local .env. Photo capture works without it; the key is blank by design.")
-        else:
-            visual, error = inspect_soil_photo(photo.getvalue(), photo.type, soil_for_photo, condition["label"])
-            if error:
-                st.info(error)
-            else:
-                st.write(f"Photo estimate: **{visual['condition']}** · {visual['note']}")
-                st.caption("A visual estimate, not a soil measurement. The model is instructed to ignore colour.")
 
 st.page_link("pages/6_Water_Usage.py", label="Add a watering log or field note", icon="💧")
