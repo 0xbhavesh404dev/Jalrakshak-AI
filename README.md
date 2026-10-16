@@ -68,6 +68,8 @@ These commands start the **website only**. To use the optional ESP32, also start
 
 Weather requests follow the free [Open-Meteo forecast API](https://open-meteo.com/en/docs) and [geocoding API](https://open-meteo.com/en/docs/geocoding-api); neither needs a key. The app asks for supported hourly soil layers and daily crop-water inputs, validates responses, caches by coordinates, and labels unavailable/demo data. The optional Gemini REST request follows the [official generateContent API](https://ai.google.dev/api/generate-content); its model name remains configurable.
 
+On **Today's field outlook**, take or upload a close-up soil photo and press **Predict from soil photo** to get a photo-based watering estimate. Gemini classifies visible surface cues and the app combines that with the crop water-balance estimate; conflicting or unclear evidence is labelled uncertain. A surface photo cannot measure root-zone moisture. The image is sent to Google Gemini only after the user requests a prediction and is not saved in the app. If camera access is unavailable, upload a JPG, PNG, or WEBP image instead.
+
 The app creates its SQLite database at `data/jalrakshak.sqlite3` on first run. Back up or delete that file as needed; it is ignored by Git.
 
 ## ESP32 hardware demo
