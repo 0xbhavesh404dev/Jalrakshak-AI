@@ -1,0 +1,58 @@
+jalrakshak-ai/
+│
+├── app.py
+│
+├── pages/
+│   ├── 1_Farm_Setup.py
+│   ├── 2_Dashboard.py
+│   ├── 3_Weather_Intelligence.py
+│   ├── 4_Digital_Twin.py
+│   ├── 5_AI_Agronomist.py
+│   └── 6_Water_Usage.py
+│
+├── core/
+│   ├── config.py
+│   ├── crops.py
+│   ├── soils.py
+│   ├── weather.py
+│   ├── waterbalance.py
+│   ├── decision.py
+│   ├── ml.py
+│   ├── simulator.py
+│   ├── optimizer.py
+│   ├── agronomist.py
+│   ├── i18n.py
+│   ├── db.py
+│   ├── advisory.py
+│   └── ui.py
+│
+├── assets/
+│   └── styles.css
+│
+├── data/
+│   ├── sample_weather_hyderabad.json
+│   └── cache/
+│
+├── models/
+│
+├── tests/
+│   ├── test_crops.py
+│   ├── test_weather.py
+│   ├── test_waterbalance.py
+│   ├── test_decision.py
+│   ├── test_db.py
+│   ├── test_simulator.py
+│   └── test_pages.py
+│
+├── .streamlit/
+│   └── config.toml
+│
+├── .env.example
+├── .gitignore
+├── requirements.txt
+├── DOCUMENTATION.md
+├── README.md
+├── PROGRESS.md
+├── DECISIONS.md
+├── DEMO_SCRIPT.md
+└── JUDGE_QA.md

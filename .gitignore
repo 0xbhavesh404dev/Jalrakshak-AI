@@ -1,0 +1,17 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest-tmp/
+*.sqlite
+*.sqlite3
+*.db
+data/cache/
+models/*
+!models/.gitkeep
+*.log
+.streamlit/secrets.toml
+.agents/
+.claude/
